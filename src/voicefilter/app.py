@@ -13,7 +13,7 @@ from typing import Optional
 
 import numpy as np
 import sounddevice as sd
-from PyQt6.QtCore import QObject, pyqtSignal
+from PyQt6.QtCore import QObject, QTimer, pyqtSignal
 
 from .audio_router import AudioRouter, DeviceNotFoundError
 from .config import AppConfig
@@ -47,6 +47,17 @@ class FilterService(QObject):
         self._in_dev = None
         self._out_dev = None
         self._running = False
+
+        # Device-health polling (P1 error states: mic unplug / VB-CABLE gone).
+        # Runs on the Qt GUI thread so it can safely query devices + emit signals.
+        self._start_in_sub: Optional[str] = None
+        self._start_out_sub: Optional[str] = None
+        self._degraded = False
+        self._degraded_reason = ""
+        self._user_paused = False
+        self._dev_poll = QTimer(self)
+        self._dev_poll.setInterval(2000)
+        self._dev_poll.timeout.connect(self._poll_devices)
 
         # Auto-load enrollment if it exists
         if Path(cfg.embedding_path).exists():
@@ -87,11 +98,16 @@ class FilterService(QObject):
         self._emit_log(f"Other-gain set to {db:.1f} dB")
 
     def pause(self) -> None:
+        self._user_paused = True
         if self.pipeline is not None:
             self.pipeline.pause()
         self._emit_state("已暂停（直通原始麦克风）")
 
     def resume(self) -> None:
+        self._user_paused = False
+        if self._degraded:
+            self._emit_state(f"已暂停 — {self._degraded_reason}（等待设备恢复）")
+            return
         if self.pipeline is not None:
             self.pipeline.resume()
         self._emit_state("运行中")
@@ -107,6 +123,11 @@ class FilterService(QObject):
             except DeviceNotFoundError as e:
                 self._emit_error(str(e))
                 return
+
+            # Remember the substrings so device-health recovery can re-resolve
+            # the same devices after an unplug/replug (idx may change; name won't).
+            self._start_in_sub = in_substring
+            self._start_out_sub = out_substring
 
             sr = self.cfg.audio.sample_rate
             frame = int(self.cfg.audio.frame_ms * sr / 1000)
@@ -146,12 +167,16 @@ class FilterService(QObject):
             self._in_dev = in_dev
             self._out_dev = out_dev
             self._running = True
+            self._degraded = False
+            self._degraded_reason = ""
             self._emit_state("运行中" if self.engine.is_enrolled() else "未注册 — 暂停中")
             self._emit_log(f"输入设备: {in_dev.name}")
             self._emit_log(f"输出设备: {out_dev.name}")
+            self._dev_poll.start()
 
     def stop(self) -> None:
         with self._lock:
+            self._dev_poll.stop()
             for s in (self._in_stream, self._out_stream):
                 if s is not None:
                     try:
@@ -166,6 +191,8 @@ class FilterService(QObject):
             self._out_dev = None
             self._out_buf = None
             self.pipeline = None
+            self._degraded = False
+            self._degraded_reason = ""
         self._emit_state("已停止")
 
     def is_running(self) -> bool:
@@ -208,6 +235,61 @@ class FilterService(QObject):
 
     def _on_pipeline_update(self, stats: FilterStats) -> None:
         self.stats_changed.emit(stats)
+
+    # --- device-health polling (P1: mic unplug / VB-CABLE disappearance) --
+
+    def _poll_devices(self) -> None:
+        """Every ~2 s while running, check that both devices are still present.
+
+        Detects mid-run mic unplug and VB-CABLE disappearance (e.g. driver
+        reload). On loss: pause the pipeline, emit error + grey-tray state.
+        On recovery: restart the streams on the same devices. Runs on the Qt
+        GUI thread, so it may call ``query_devices`` and emit signals safely.
+        """
+        if not self._running or self._in_dev is None or self._out_dev is None:
+            return
+        try:
+            inputs = self.router.list_input_devices()
+            outputs = self.router.list_output_devices()
+        except Exception:  # pragma: no cover — transient PortAudio query error
+            log.debug("device query failed; will retry next tick")
+            return
+
+        # Match by name: indices can reorder on unplug/replug, names don't.
+        in_ok = any(d.name == self._in_dev.name for d in inputs)
+        out_ok = any(d.name == self._out_dev.name for d in outputs)
+
+        if in_ok and out_ok:
+            if self._degraded:
+                self._recover()
+            return
+
+        reasons = []
+        if not in_ok:
+            reasons.append(f"麦克风丢失：{self._in_dev.name}")
+        if not out_ok:
+            reasons.append(f"虚拟音频设备丢失：{self._out_dev.name}")
+        msg = "；".join(reasons)
+        if not self._degraded:
+            self._enter_degraded(msg)
+
+    def _enter_degraded(self, reason: str) -> None:
+        self._degraded = True
+        self._degraded_reason = reason
+        if self.pipeline is not None:
+            self.pipeline.pause()
+        self._emit_error(f"已暂停过滤 — {reason}。等待设备恢复后自动重连。")
+        self._emit_state(f"已暂停 — {reason}")
+
+    def _recover(self) -> None:
+        was_reason = self._degraded_reason
+        self._degraded = False
+        self._degraded_reason = ""
+        self._emit_log(f"设备已恢复（{was_reason} 已解决），重新连接音频流…")
+        # The old streams are likely dead; start() stops them and reopens on
+        # the same device names (re-resolved by substring).
+        if self._start_in_sub and self._start_out_sub:
+            self.start(self._start_in_sub, self._start_out_sub)
 
     # --- helpers ---------------------------------------------------------
 
