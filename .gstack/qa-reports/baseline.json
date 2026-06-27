@@ -1,0 +1,61 @@
+{
+  "date": "2026-06-27",
+  "url": "local-windows-app",
+  "branch": "main",
+  "mode": "quick-local-smoke",
+  "tier": "standard",
+  "duration_minutes": 15,
+  "healthScore": 98.5,
+  "preFixScore": 88.0,
+  "delta": 10.5,
+  "testSummary": {
+    "pytest_total": 44,
+    "pytest_passed": 44,
+    "pytest_failed": 0,
+    "pytest_warnings": 0,
+    "frozen_exe_present": true,
+    "frozen_exe_size_bytes": 92518790,
+    "frozen_exe_startup_clean_stderr": true
+  },
+  "issues": [
+    {
+      "id": "ISSUE-001",
+      "title": "verify_pipeline.py requires unshipped soundfile dep",
+      "severity": "critical",
+      "category": "functional",
+      "status": "verified-fixed",
+      "commit": "884e88f"
+    },
+    {
+      "id": "ISSUE-002",
+      "title": "frozen exe emits pydantic protected_namespaces warning at launch",
+      "severity": "medium",
+      "category": "ux",
+      "status": "verified-fixed",
+      "commit": "0ebcb75"
+    },
+    {
+      "id": "ISSUE-003",
+      "title": "tests/audio/*.wav fixtures not git-ignored",
+      "severity": "low",
+      "category": "process",
+      "status": "verified-fixed",
+      "commit": "0ebcb75"
+    }
+  ],
+  "categoryScores": {
+    "console": 100,
+    "links": 100,
+    "visual": 100,
+    "functional": 100,
+    "ux": 95,
+    "performance": 100,
+    "content": 100,
+    "accessibility": 100
+  },
+  "humanOnlyDeferred": [
+    "real-voice enrollment wizard end-to-end",
+    "live meeting attenuation with VB-CABLE",
+    "physical device hot-unplug recovery"
+  ]
+}
