@@ -28,7 +28,7 @@ PROMPT_TEXT = (
     "保持自然语速，距离麦克风约 20-40 厘米，环境尽量安静：\n\n"
     "今天天气不错，我正在测试声纹注册系统。\n"
     "一二三四五六七八九十。\n"
-    "Hello world, this is a calibration test for voice biometrics.\n"
+    "The quick brown fox jumps over the lazy dog every morning.\n"
     "持续的、不间断的朗读，可以显著提高识别准确率。\n"
     "三二一，开始。"
 )
