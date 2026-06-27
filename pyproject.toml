@@ -1,0 +1,8 @@
+[project]
+name = "voiceprint-filter"
+version = "0.1.0"
+description = "Local voiceprint filter — only your voice reaches virtual mic"
+requires-python = ">=3.10"
+
+[tool.setuptools.packages.find]
+where = ["src"]

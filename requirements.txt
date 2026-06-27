@@ -1,0 +1,7 @@
+sounddevice==0.4.7
+numpy==1.26.4
+sherpa-onnx==1.10.30
+PyQt6==6.7.1
+pydantic==2.9.2
+PyYAML==6.0.2
+pyinstaller==6.10.0

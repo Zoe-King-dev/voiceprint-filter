@@ -1,0 +1,23 @@
+audio:
+  sample_rate: 16000
+  frame_ms: 30
+  window_sec: 1.0
+  hop_sec: 0.5
+  input_device_substring: "Microphone"
+  output_device_substring: "CABLE Input"
+
+vad:
+  enabled: true
+  threshold: 0.5
+  min_speech_ms: 250
+  min_silence_ms: 100
+
+speaker:
+  model_path: "models/3dspeaker_speech_campplus_sv_zh-cn_16k-common.onnx"
+  threshold: 0.62
+  other_gain_db: -30.0
+  my_gain_db: 0.0
+  no_speech_gain_db: -6.0
+
+embedding_path: "data/enrollment/user_embedding.npy"
+log_level: "INFO"
