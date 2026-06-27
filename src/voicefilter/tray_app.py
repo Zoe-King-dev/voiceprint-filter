@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import logging
 import sys
+import warnings
 from logging.handlers import RotatingFileHandler
 
 from PyQt6.QtCore import QObject, Qt
@@ -147,6 +148,18 @@ def _setup_logging(resolver: PathResolver, level: str) -> None:
 
 def run() -> int:
     """Module-level entry point used by main.py."""
+    # Silence pydantic's 'Field "model_path" has conflict with protected namespace
+    # "model_"' warning. We've already opted every config class out of the namespace
+    # (ConfigDict(protected_namespaces=())), but PyInstaller's frozen bundle appears
+    # to instantiate the models via a path that re-triggers the warning -- the
+    # warning is a false positive for our field naming. Without this filter, every
+    # launch prints a red stderr line that non-technical users see as a crash.
+    warnings.filterwarnings(
+        "ignore",
+        message=r".*protected namespace.*",
+        category=UserWarning,
+    )
+
     from .config import AppConfig as _Cfg
 
     resolver = PathResolver()
