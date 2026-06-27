@@ -1,0 +1,67 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: write   # needed by softprops/action-gh-release to cut a Release on tag
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest
+
+      - name: Download ONNX models
+        # Bundles the speaker + VAD models into ./models so PyInstaller
+        # embeds them (design doc: models ship inside the installer).
+        run: python scripts/download_models.py
+
+      - name: Run tests
+        run: python -m pytest -q
+
+      - name: Build exe (PyInstaller)
+        run: python -m PyInstaller voiceprint-filter.spec --noconfirm
+
+      - name: Stage release artifact
+        # one-file build produces a single exe in dist/
+        shell: pwsh
+        run: |
+          $dist = "dist/voiceprint-filter.exe"
+          if (Test-Path $dist) {
+            Copy-Item $dist "voiceprint-filter-${{ github.ref_name }}.exe"
+            Write-Host "Staged voiceprint-filter-${{ github.ref_name }}.exe"
+          } else {
+            Write-Host "::warning::one-file exe not found at $dist; nothing to stage"
+          }
+
+      - name: Upload build artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: voiceprint-filter-windows
+          path: dist/
+          if-no-files-found: warn
+
+      - name: Create GitHub Release on tag
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: voiceprint-filter-${{ github.ref_name }}.exe
+          generate_release_notes: true
+          draft: true   # review the build before publishing
