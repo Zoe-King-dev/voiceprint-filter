@@ -1,159 +1,103 @@
 # 声纹过滤 — Voiceprint Filter
 
-一个完全跑在 **本机 Windows** 上的"声纹门"：只保留你的声音传入腾讯会议 / Zoom / 飞书 / Discord，其他人插话、电视、空调噪声会被极大衰减。
+一个完全跑在**本机 Windows** 上的"声纹门"：只保留**你的声音**传入腾讯会议 / Zoom / 飞书 / Discord，旁边其他人说话、电视、空调噪声会被极大衰减。和传统降噪不同，它按**说话人身份**过滤，不是按噪声类型过滤——所以"旁边有人插话"这种场景它管得了，Krisp / RTX Voice 管不了。
 
 ```
 [真实麦克风] → [本程序：sherpa-onnx 声纹识别] → [VB-CABLE 虚拟麦克风] → [腾讯会议]
 ```
 
-## 它做什么
+所有处理 100% 本地、离线、CPU 运行，**不联网、不上传任何音频**。
 
-- **拦截**：占用你真实的麦克风，把音频送进本地管线。
-- **识别**：用 [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx) 的 **3D-Speaker** 模型（中文 campplus，192 维声纹嵌入）。
-- **过滤**：每 0.5 秒把当前声纹与你注册的样本做余弦相似度。
-  - 相似度 ≥ 阈值 → 原音量（0 dB）输出
-  - 相似度 < 阈值 → 衰减到 -30 dB（≈ 1/30 音量，几乎听不见）
-  - 静音 → -6 dB（避免腾讯会议误判"麦克风没声音"）
-- **输出**：把处理后的音频写入 **VB-CABLE Input** 虚拟声卡。
-- **消费**：你在腾讯会议里手动把麦克风选为 **CABLE Output**。
+---
 
-## 安装
+## 快速开始（普通用户）
 
-### 1. 安装虚拟音频驱动 VB-CABLE（**必须**）
+> 需要从 [Releases](../../releases) 下载打包好的 `voiceprint-filter.exe`。首次发布前可先用下方"从源码运行"。
 
-1. 到 <https://vb-audio.com/Cable/> 下载 `VBCABLE_Driver_Pack43.zip`
-2. 解压，右键 `VBCABLE_Setup_x64.exe` → **以管理员身份运行** → Install → 重启电脑
-3. 重启后，打开"设置 → 系统 → 声音"，应该能看到 `CABLE Input (VB-Audio Virtual Cable)` 和 `CABLE Output` 两个设备
+1. **装 VB-CABLE**（必须，免费）：到 <https://vb-audio.com/Cable/> 下载 `VBCABLE_Driver_Pack43.zip` → 解压 → 右键 `VBCABLE_Setup_x64.exe` **以管理员身份运行** → Install → **重启电脑**。
+2. **下载并运行** `voiceprint-filter.exe`。首次启动会检测 VB-CABLE 和声纹模型，缺失会弹窗引导。
+3. **注册声纹**：用日常说话音量朗读 20 秒。程序只保存 192 个浮点数（声纹向量），**不保存原始录音**。
+4. **在会议里选麦克风**：腾讯会议 → 设置 → 音频 → 麦克风选 `CABLE Output (VB-Audio Virtual Cable)`。关闭腾讯会议自带的"麦克风降噪/声音美化"。
+5. 看托盘图标变绿 = 正在过滤。别人说话会被压到几乎听不见，你说话原样通过。
 
-> **VB-CABLE 是免费给个人使用的（donationware），不是开源但可以商用且有 Windows 驱动签名。**
-> 不喜欢 VB-CABLE 也可以用 **VoiceMeeter Banana**（功能更强但更复杂），本程序同样适用——只要把它当成"输出设备"即可。
-
-### 2. 安装 Python 依赖
+## 从源码运行（开发者 / 高级用户）
 
 ```bash
+git clone https://github.com/Zoe-King-dev/voiceprint-filter.git
 cd voiceprint-filter
-python -m venv .venv
-.venv\Scripts\activate
+python -m venv .venv && .venv\Scripts\activate
 pip install -r requirements.txt
-```
-
-> 不要额外 `pip install onnxruntime`——sherpa-onnx 的 wheel 自带 ONNX Runtime，同时装会冲突。
-
-### 3. 下载声纹模型
-
-```bash
-python scripts/download_models.py
-```
-
-会把两个 ONNX 模型（合计约 30 MB）下载到 `models/`：
-
-- `3dspeaker_speech_campplus_sv_zh-cn_16k-common.onnx`（声纹嵌入）
-- `silero_vad.onnx`（语音活动检测）
-
-### 4. 启动
-
-```bash
+python scripts/download_models.py   # 两个 ONNX 模型（约 30 MB）下到 ./models/
 python main.py
 ```
 
-首次启动会弹出**注册向导**：用日常说话音量朗读一段文字 20 秒，程序提取声纹并保存到 `data/enrollment/user_embedding.npy`（**不保存原始录音**）。
+> 不要额外 `pip install onnxruntime`——sherpa-onnx 的 wheel 自带 ONNX Runtime，同时装会冲突。Python ≥ 3.10。
 
-注册完成后，程序最小化到系统托盘，实时跑过滤。
+自测声纹引擎（不开腾讯会议）：
 
-## 在腾讯会议里启用
-
-1. 打开腾讯会议 → 头像 → 设置 → 音频
-2. **麦克风**：选择 `CABLE Output (VB-Audio Virtual Cable)`
-3. **关闭**腾讯会议自带的"麦克风降噪"和"声音美化"（避免双重处理）
-4. 入会前确认本程序已运行（看托盘图标是否为绿色）
-
-> 提示：保留 Windows 自带麦克风仍是默认设备，腾讯会议选 CABLE Output 就只用到处理后的音频了。
+```bash
+python scripts/verify_pipeline.py --record    # 录两段 10s，打印 score
+python scripts/measure_latency.py             # 测延迟预算
+python -m pytest -q                           # 跑单元测试
+```
 
 ## 调参
 
-主窗口：
+主窗口里：
 
 | 控件 | 含义 | 建议值 |
 |---|---|---|
-| **判定阈值** | 余弦相似度低于此值视为"他人" | 0.58–0.66；想更严格就调高 |
-| **他人衰减** | 别人声音压低的分贝数 | -30 dB（默认值，保留微弱存在感）；-∞ 几乎等于完全静音 |
+| **判定阈值** | 余弦相似度低于此值视为"他人" | 0.58–0.66；想更严就调高 |
+| **他人衰减** | 别人声音压低的分贝数 | -30 dB（默认，保留微弱存在感）；-∞ 几乎全静音 |
 
-实时 score 条：
+实时 score 条：绿色 = 我（保留）/ 红色 = 他人（衰减）/ 灰色 = 静音。最佳调法：开两个扬声器，自己说话时关一个，观察绿红 score 差取中点作阈值。
 
-- 绿色 = 你的声音（被保留）
-- 红色 = 他人 / 噪声（被衰减）
-- 灰色 = 静音
+## 麦克风一致性（重要）
 
-最佳调参方法：开两个扬声器（自己说话时关一个），观察绿色与红色的 score 差，取中点作为阈值。
+**注册时用什么麦，会议时必须用同一只麦**——声纹对麦克风频响非常敏感，换麦会让 score 暴跌。换麦了就重做一次注册。这是误判的头号原因。
 
-## 验证（不开腾讯会议）
+## 常见问题 / 故障排查
 
-```bash
-# 录两段测试音频 + 看打分
-python scripts/verify_pipeline.py --record
-```
+| 现象 | 原因 / 解决 |
+|---|---|
+| 装了 VB-CABLE 但"声音"设置里看不到 | 必须**重启电脑**。驱动级安装要等 Windows 重新枚举设备。 |
+| 启动弹窗"未检测到 VB-CABLE" | 没装或没重启。去 vb-audio.com/Cable 装，重启。 |
+| 启动弹窗"模型文件缺失" | 联网下载失败。点"重试"，或从 GitHub Releases 手动下模型包放到 `%APPDATA%/voiceprint-filter/models/`。 |
+| 自己说话也被衰减了 | 阈值调低（0.55 左右），或重新注册（同麦、同距离）。 |
+| 别人说话还能听到 | "他人衰减"调到 -50 dB 或更低；或阈值调到 0.70+（太高会切到自己）。 |
+| 托盘变灰 + 通知"麦克风丢失" | 麦克风被拔出/换 USB 口。重新插好会自动恢复。 |
+| 托盘变灰 + 通知"虚拟音频设备丢失" | VB-CABLE 驱动被重载。等它恢复会自动重连。 |
+| 程序崩溃 | 日志在 `%APPDATA%/voiceprint-filter/logs/voiceprint-filter.log`，托盘菜单"查看日志/报告问题"可直接打开。 |
+| 延迟多大？ | 稳态反应约 0.5 s（一个 hop）；冷启动约 1 s（滑窗首次填满）。会议够用；游戏开黑要更低延迟，暂不支持。 |
+| CPU 占用？ | i5/i7 单核约 5–10%，`num_threads=2` 已够。 |
 
-期望输出：
-```
-  ME     score=+0.71  thr=0.62  → ACCEPT   (12 ms)
-  OTHER  score=+0.18  thr=0.62  → REJECT   (10 ms)
-```
+> 想改延迟/窗口：编辑 `config/default.yaml`，`window_sec` 调到 0.6、`hop_sec` 调到 0.3 反应更快（误判风险略升）。
 
-或者：
-1. 打开 **Audacity**，录音设备选 `CABLE Output`
-2. 启动本程序
-3. 自己说话 / 让别人说话
-4. 看波形：自己是大波形，别人是被压扁的几乎一条线
+## 隐私
 
-## 麦克风一致性提醒
-
-**注册时用什么麦，会议时必须用同一只麦**——声纹对麦克风频响非常敏感，换麦会让 score 暴跌，误判为他人的概率急剧升高。如果换麦了，重做一次注册。
+- 只保存 **192 个浮点数**（声纹 embedding），无法反向还原原始音频。
+- 注册完成后立即丢弃原始录音，**不写盘**。
+- 100% 本地处理，推理在 CPU 上，**不联网**（仅首次下载模型时联网）。
+- 日志只记运行状态，不含音频。
 
 ## 目录结构
 
 ```
 voiceprint-filter/
 ├── main.py                  # 入口
-├── config/                  # 默认 + 用户配置
+├── voiceprint-filter.spec   # PyInstaller 打包配置
+├── config/                  # default.yaml（随程序）+ user.yaml（你的覆盖）
 ├── models/                  # ONNX 模型（脚本下载）
-├── data/enrollment/         # 注册好的 embedding
 ├── scripts/
 │   ├── download_models.py   # 拉模型
-│   └── verify_pipeline.py   # 自测
-└── src/voicefilter/
-    ├── config.py            # pydantic 配置
-    ├── audio_router.py      # sounddevice 封装
-    ├── speaker_engine.py    # sherpa-onnx 声纹
-    ├── vad.py               # Silero VAD
-    ├── filter_pipeline.py   # 实时过滤核心
-    ├── enrollment.py        # 注册向导
-    ├── main_window.py       # 主控制面板
-    ├── tray_app.py          # 系统托盘
-    └── app.py               # 服务层（QObject）
+│   ├── verify_pipeline.py   # 自测打分
+│   └── measure_latency.py   # 延迟预算
+├── tests/                   # pytest 单元测试
+└── src/voicefilter/         # config / audio_router / speaker_engine / vad
+                             # filter_pipeline / enrollment / main_window / tray_app / app / paths
 ```
 
-## 隐私
-
-- 只保存 **192 个浮点数**（声纹 embedding），无法反向还原原始音频
-- 注册完成后，程序会立即丢弃原始录音，不写盘
-- 所有处理 100% 本地，**不联网**（模型推理在 CPU 上）
-
-## 常见问题
-
-**Q: 装了 VB-CABLE 但"声音"设置里看不到？**
-A: 必须**重启电脑**。驱动级安装要等 Windows 重新枚举设备。
-
-**Q: 自己说话也被衰减了？**
-A: 把判定阈值降低一点（0.55 左右），或重新注册——确保注册时和会议时用同一只麦且距离一致。
-
-**Q: 别人说话还能听到？**
-A: 把"他人衰减"调到 -50 dB 或更低；或者把阈值调到 0.70+。注意阈值太严格会切到自己。
-
-**Q: 延迟多大？**
-A: 端到端约 500 ms（30 ms 帧 + 1 s 滑窗 + 30 ms 输出）。如果会议方反映你说话"慢半拍"，可以编辑 `config/default.yaml` 把 `window_sec` 改到 0.6、`hop_sec` 改到 0.3。
-
-**Q: CPU 占用？**
-A: i5/i7 上单核约 5–10%。`num_threads=2` 已经够用。
+冻结（exe）模式下，只读资源（模型、`default.yaml`）来自 PyInstaller 临时目录，可写数据（注册 embedding、日志）写到 `%APPDATA%/voiceprint-filter/`——由 `paths.PathResolver` 统一解析。
 
 ## 许可
 
@@ -161,4 +105,24 @@ A: i5/i7 上单核约 5–10%。`num_threads=2` 已经够用。
 - [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx) (Apache 2.0)
 - [3D-Speaker](https://github.com/modelscope/3D-Speaker) (Apache 2.0)
 - [Silero VAD](https://github.com/snakers4/silero-vad) (MIT)
-- [VB-CABLE](https://vb-audio.com/Cable/) (donationware, 个人免费)
+- [VB-CABLE](https://vb-audio.com/Cable/) (donationware，个人免费)
+
+本项目代码采用 **Apache 2.0**。
+
+---
+
+## English
+
+A local **Windows** "voice gate": only **your** voice reaches 腾讯会议 / Zoom / 飞书 / Discord; other people talking nearby, the TV, AC hum are heavily attenuated. Unlike noise reduction, it filters by **speaker identity**, not noise type — so a "someone next to me chimes in" situation is handled here, not by Krisp / RTX Voice. 100% local, offline, CPU — no network, no audio uploaded.
+
+**Quick start (end user):** install [VB-CABLE](https://vb-audio.com/Cable/) (free, then **reboot**), download `voiceprint-filter.exe` from [Releases](../../releases), run it, enroll your voice (20 s, only a 192-d vector is saved — **no raw audio**), then set your meeting app's microphone to `CABLE Output`. Tray icon green = filtering.
+
+**From source:** `python -m venv .venv && .venv\Scripts\activate && pip install -r requirements.txt && python scripts/download_models.py && python main.py` (Python ≥ 3.10; do **not** separately `pip install onnxruntime` — sherpa-onnx bundles its own ORT).
+
+**Tuning:** threshold 0.58–0.66 (cosine similarity below it = "other"); other-gain -30 dB default. Keep the **same mic** for enrollment and meetings — embeddings are mic-frequency-response-sensitive; switching mics is the #1 cause of false rejects.
+
+**Troubleshooting:** see the Chinese table above (VB-CABLE invisible until reboot; model-download retry; tray greys on mic/CABLE loss with auto-recover; crash logs at `%APPDATA%/voiceprint-filter/logs/`). Latency: ~0.5 s steady-state, ~1 s cold start — fine for meetings, not yet for gaming.
+
+**Privacy:** only a 192-d embedding is stored; raw enrollment audio is discarded in memory and never written to disk; inference is on-device CPU; logs contain no audio.
+
+**License:** Apache 2.0 for this project's glue code; recognition credited to sherpa-onnx / 3D-Speaker (Apache 2.0), Silero VAD (MIT), VB-CABLE (donationware).
