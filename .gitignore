@@ -28,3 +28,6 @@ logs/
 .vscode/
 .DS_Store
 Thumbs.db
+
+# Local design notes / scratch (not part of source)
+*-design-*.md
