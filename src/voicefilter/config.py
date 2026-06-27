@@ -5,12 +5,18 @@ from pathlib import Path
 from typing import Any
 
 import yaml
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from .paths import PathResolver
 
+# Our configs use a field named ``model_path``; pydantic v2 reserves the
+# ``model_`` prefix as a protected namespace and warns on it. We don't rely
+# on that namespace protection, so opt out cleanly on every model below.
+_CFG = ConfigDict(protected_namespaces=())
+
 
 class AudioConfig(BaseModel):
+    model_config = _CFG
     sample_rate: int = 16000
     frame_ms: int = 30
     window_sec: float = 1.0
@@ -28,6 +34,7 @@ class AudioConfig(BaseModel):
 
 
 class VADConfig(BaseModel):
+    model_config = _CFG
     enabled: bool = True
     threshold: float = 0.5
     min_speech_ms: int = 250
@@ -36,6 +43,7 @@ class VADConfig(BaseModel):
 
 
 class SpeakerConfig(BaseModel):
+    model_config = _CFG
     model_path: Path = Path("models/3dspeaker_speech_campplus_sv_zh-cn_16k-common.onnx")
     threshold: float = 0.62
     other_gain_db: float = -30.0
@@ -51,6 +59,7 @@ class SpeakerConfig(BaseModel):
 
 
 class AppConfig(BaseModel):
+    model_config = _CFG
     audio: AudioConfig = Field(default_factory=AudioConfig)
     vad: VADConfig = Field(default_factory=VADConfig)
     speaker: SpeakerConfig = Field(default_factory=SpeakerConfig)

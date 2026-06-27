@@ -66,10 +66,15 @@ class SpeakerEngine:
             )
         sherpa = _sherpa()
         log.info("Loading speaker model: %s", self.model_path)
-        self._extractor = sherpa.SpeakerEmbeddingExtractor(
+        # sherpa-onnx >= 1.12 changed the API: the Extractor now takes a
+        # SpeakerEmbeddingExtractorConfig object (the old kwargs-on-Extractor
+        # form was removed), and compute() consumes an OnlineStream rather
+        # than raw (samples, sample_rate). See extract_embedding() below.
+        config = sherpa.SpeakerEmbeddingExtractorConfig(
             model=str(self.model_path),
             num_threads=self.num_threads,
         )
+        self._extractor = sherpa.SpeakerEmbeddingExtractor(config)
         log.info("Speaker model loaded.")
 
     def is_enrolled(self) -> bool:
@@ -101,8 +106,14 @@ class SpeakerEngine:
             return np.zeros(self.EMBEDDING_DIM, dtype=np.float32)
         samples = audio.astype(np.float32, copy=False)
         sherpa = _sherpa()
-        emb = self._extractor.compute(samples, sample_rate=sample_rate)
-        # sherpa returns a numpy array; normalize so cosine = dot product
+        # sherpa-onnx >= 1.12: feed audio into a fresh OnlineStream, then
+        # compute() over the stream. Note the arg order is (sample_rate,
+        # waveform) -- the reverse of the old compute(samples, sample_rate).
+        stream = self._extractor.create_stream()
+        stream.accept_waveform(int(sample_rate), samples)
+        emb = self._extractor.compute(stream)
+        # compute() returns a list/ndarray of 192 floats; normalize so
+        # cosine similarity is just a dot product.
         return _normalize(np.asarray(emb, dtype=np.float32))
 
     def verify(self, audio: np.ndarray, sample_rate: int = 16000) -> Tuple[bool, float]:

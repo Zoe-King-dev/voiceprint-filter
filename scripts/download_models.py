@@ -8,19 +8,19 @@ from __future__ import annotations
 import hashlib
 import logging
 import sys
-import tarfile
 import urllib.request
 from pathlib import Path
 
 log = logging.getLogger(__name__)
 
+# NOTE: the speaker-models release tag is misspelled upstream
+# ("speaker-recongition-models", missing an "i"). This is the official tag
+# used across sherpa-onnx docs/scripts — keep it as-is.
 EMBEDDING_URL = (
     "https://github.com/k2-fsa/sherpa-onnx/releases/download/"
-    "asr-models/3dspeaker_speech_campplus_sv_zh-cn_16k-common.tar.bz2"
+    "speaker-recongition-models/3dspeaker_speech_campplus_sv_zh-cn_16k-common.onnx"
 )
-EMBEDDING_FILES = (
-    "models/3dspeaker_speech_campplus_sv_zh-cn_16k-common.onnx",
-)
+EMBEDDING_FILE = "models/3dspeaker_speech_campplus_sv_zh-cn_16k-common.onnx"
 
 VAD_URL = (
     "https://github.com/k2-fsa/sherpa-onnx/releases/download/"
@@ -58,15 +58,9 @@ def main() -> int:
     models = root / "models"
     models.mkdir(exist_ok=True)
 
-    # Embedding: tar.bz2
-    tar_path = models / "3dspeaker_speech_campplus_sv_zh-cn_16k-common.tar.bz2"
-    _download(EMBEDDING_URL, tar_path)
-    if tar_path.exists() and not (models / "3dspeaker_speech_campplus_sv_zh-cn_16k-common.onnx").exists():
-        log.info("Extracting %s ...", tar_path)
-        with tarfile.open(tar_path) as t:
-            t.extractall(models)
-        tar_path.unlink()
-    log.info("Embedding model ready: %s", EMBEDDING_FILES)
+    # Embedding model (direct .onnx, no extraction step)
+    _download(EMBEDDING_URL, models / "3dspeaker_speech_campplus_sv_zh-cn_16k-common.onnx")
+    log.info("Embedding model ready: %s", EMBEDDING_FILE)
 
     # VAD
     _download(VAD_URL, models / "silero_vad.onnx")

@@ -80,6 +80,15 @@ class FlagEngine:
 
 def _build_cfg(window_sec: float, hop_sec: float) -> AppConfig:
     cfg = AppConfig()
+    # Force the EnergyVAD fallback so the pipeline measurements are
+    # deterministic and don't depend on whether the real Silero model is
+    # downloaded. A steady loud signal reads as speech under EnergyVAD
+    # (rms > threshold); the real SileroVAD has internal state and does not
+    # treat a DC signal as speech. The pipeline overhead/reaction numbers
+    # are about mechanics, not VAD accuracy. Real model inference is
+    # measured separately in maybe_measure_real_inference().
+    from pathlib import Path
+    cfg.vad.model_path = Path("does-not-exist-vad.onnx")
     cfg.audio.window_sec = window_sec
     cfg.audio.hop_sec = hop_sec
     return cfg
@@ -154,19 +163,35 @@ def measure_gain_reaction(cfg: AppConfig) -> tuple[float, float, float]:
 
 
 def maybe_measure_real_inference(cfg: AppConfig) -> float | None:
-    """If sherpa + speaker model are available, time one verify(); else None."""
+    """If sherpa + speaker model are available, time one embedding extraction.
+
+    Times extract_embedding (which always runs the ONNX forward pass), not
+    verify() -- verify() short-circuits to (False, 0.0) when no enrollment
+    is loaded and would never call the model, yielding a bogus 0.0 ms.
+    """
     try:
         from voicefilter.speaker_engine import SpeakerEngine  # noqa: WPS433
         if not Path(cfg.speaker.model_path).exists():
             return None
         eng = SpeakerEngine(cfg.speaker.model_path, threshold=cfg.speaker.threshold)
         sr = cfg.audio.sample_rate
-        audio = np.ones(sr, dtype=np.float32) * 0.1  # 1s of mild speech-level audio
-        # Warm up (first call loads the model)
-        eng.verify(audio, sample_rate=sr)
-        t0 = time.perf_counter()
-        eng.verify(audio, sample_rate=sr)
-        return (time.perf_counter() - t0) * 1000.0
+        # A speech-ish signal (sine + noise) so the network does real work
+        # and produces a non-degenerate embedding. Amplitude/meaning don't
+        # matter here -- we only time the forward pass.
+        t = np.linspace(0, 1, sr, endpoint=False, dtype=np.float32)
+        audio = (0.3 * np.sin(2 * np.pi * 200 * t)
+                 + 0.1 * np.random.default_rng(0).standard_normal(sr)).astype(np.float32)
+        # Warm up: first call loads the model into memory.
+        eng.extract_embedding(audio, sample_rate=sr)
+        # Timed: average over a few calls for a stable number.
+        samples = []
+        for _ in range(5):
+            t0 = time.perf_counter()
+            emb = eng.extract_embedding(audio, sample_rate=sr)
+            samples.append((time.perf_counter() - t0) * 1000.0)
+        if not np.any(emb):
+            log.warning("embedding came back all-zeros; inference time may be unreliable.")
+        return statistics.mean(samples)
     except Exception as e:  # noqa: BLE001
         log.debug("real inference skipped: %s", e)
         return None

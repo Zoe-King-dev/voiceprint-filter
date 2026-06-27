@@ -9,6 +9,7 @@ _decide() gain-selection logic without any ONNX inference.
 from __future__ import annotations
 
 import math
+from pathlib import Path
 
 import numpy as np
 
@@ -40,7 +41,13 @@ class FakeEngine:
 
 
 def _cfg() -> AppConfig:
-    cfg = AppConfig()  # all defaults; vad.model_path won't exist → EnergyVAD
+    cfg = AppConfig()
+    # Force the EnergyVAD fallback so tests are deterministic regardless of
+    # whether the real Silero model happens to be downloaded. A steady DC
+    # ones-signal reads as speech under EnergyVAD (rms > threshold), which
+    # is what the gain-selection assertions rely on. The real SileroVAD has
+    # internal buffer state and doesn't treat a DC signal as speech.
+    cfg.vad.model_path = Path("does-not-exist-vad.onnx")
     # Shrink window/hop so tests push few samples but trigger _decide().
     cfg.audio.window_sec = 0.1  # 1600 samples @ 16k
     cfg.audio.hop_sec = 0.05    # 800 samples
