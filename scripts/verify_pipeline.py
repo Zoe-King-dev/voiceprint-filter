@@ -16,8 +16,13 @@ import time
 from pathlib import Path
 
 import numpy as np
-import sounddevice as sd
-import soundfile as sf
+import wave  # stdlib -- avoids pulling soundfile just to read .wav sanity-check clips
+
+# sounddevice is only needed for the optional --record mode.
+try:
+    import sounddevice as sd  # type: ignore
+except Exception:  # pragma: no cover
+    sd = None  # type: ignore
 
 # Allow running from project root without installing
 ROOT = Path(__file__).resolve().parents[1]
@@ -26,6 +31,42 @@ sys.path.insert(0, str(ROOT / "src"))
 from voicefilter.speaker_engine import SpeakerEngine  # noqa: E402
 
 log = logging.getLogger(__name__)
+
+
+def _read_wav_mono(path: Path) -> tuple[np.ndarray, int]:
+    """Read a PCM .wav as mono float32 in [-1, 1]. Uses stdlib, no soundfile.
+
+    The verification script only needs 16k/mono PCM (the format we record
+    and the format `tests/audio/*.wav` ships in), so stdlib `wave` is
+    sufficient -- avoids adding `soundfile` to requirements.txt.
+    """
+    with wave.open(str(path), "rb") as w:
+        sr = w.getframerate()
+        n_channels = w.getnchannels()
+        sampwidth = w.getsampwidth()
+        frames = w.readframes(w.getnframes())
+    if sampwidth == 2:
+        audio = np.frombuffer(frames, dtype="<i2").astype(np.float32) / 32768.0
+    elif sampwidth == 4:
+        audio = np.frombuffer(frames, dtype="<i4").astype(np.float32) / 2147483648.0
+    elif sampwidth == 1:
+        audio = (np.frombuffer(frames, dtype=np.uint8).astype(np.float32) - 128.0) / 128.0
+    else:
+        raise ValueError(f"unsupported sample width: {sampwidth}")
+    if n_channels > 1:
+        audio = audio.reshape(-1, n_channels).mean(axis=1)
+    return audio, sr
+
+
+def _write_wav_mono(path: Path, audio: np.ndarray, sr: int) -> None:
+    """Write mono 16-bit PCM .wav. Stdlib only."""
+    pcm = np.clip(audio, -1.0, 1.0)
+    pcm_i16 = (pcm * 32767.0).astype("<i2")
+    with wave.open(str(path), "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(sr)
+        w.writeframes(pcm_i16.tobytes())
 
 
 def _resample_if_needed(audio: np.ndarray, sr: int, target_sr: int = 16000) -> np.ndarray:
@@ -41,15 +82,18 @@ def _resample_if_needed(audio: np.ndarray, sr: int, target_sr: int = 16000) -> n
 
 def _load_or_record(path: Path, record_sec: float, sr: int = 16000) -> np.ndarray:
     if path.exists() and path.stat().st_size > 0:
-        audio, file_sr = sf.read(str(path), dtype="float32")
-        if audio.ndim > 1:
-            audio = audio.mean(axis=1)
+        audio, file_sr = _read_wav_mono(path)
         return _resample_if_needed(audio, file_sr, sr)
+    if sd is None:
+        raise RuntimeError(
+            f"{path} not found and sounddevice is not installed -- "
+            "install requirements.txt to use --record."
+        )
     print(f"Recording {record_sec:.0f}s from default mic → {path} ...")
     rec = sd.rec(int(record_sec * sr), samplerate=sr, channels=1, dtype="float32", blocking=True)
     audio = rec.flatten()
     path.parent.mkdir(parents=True, exist_ok=True)
-    sf.write(str(path), audio, sr)
+    _write_wav_mono(path, audio, sr)
     return audio
 
 
