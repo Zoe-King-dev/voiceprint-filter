@@ -7,6 +7,8 @@ from typing import Any
 import yaml
 from pydantic import BaseModel, Field, field_validator
 
+from .paths import PathResolver
+
 
 class AudioConfig(BaseModel):
     sample_rate: int = 16000
@@ -30,6 +32,7 @@ class VADConfig(BaseModel):
     threshold: float = 0.5
     min_speech_ms: int = 250
     min_silence_ms: int = 100
+    model_path: Path = Path("models/silero_vad.onnx")
 
 
 class SpeakerConfig(BaseModel):
@@ -55,10 +58,16 @@ class AppConfig(BaseModel):
     log_level: str = "INFO"
 
     @classmethod
-    def load(cls, project_root: Path) -> "AppConfig":
-        """Merge default.yaml and user.yaml (if present). user.yaml wins."""
-        default = project_root / "config" / "default.yaml"
-        user = project_root / "config" / "user.yaml"
+    def load(cls, resolver: PathResolver) -> "AppConfig":
+        """Merge default.yaml and user.yaml (if present). user.yaml wins.
+
+        ``resolver`` decides where each path lands: read-only resources
+        (models, shipped default.yaml) vs writable user data (enrollment,
+        user.yaml). This is what makes the config work both from a source
+        checkout and from a PyInstaller-frozen exe.
+        """
+        default = resolver.config_dir() / "default.yaml"
+        user = resolver.user_config_path()
 
         merged: dict[str, Any] = {}
         if default.exists():
@@ -67,14 +76,19 @@ class AppConfig(BaseModel):
             override = yaml.safe_load(user.read_text(encoding="utf-8")) or {}
             _deep_merge(merged, override)
 
-        # Resolve relative paths against project_root
+        # Resolve relative paths. Models are bundled resources (read-only);
+        # the enrollment embedding is writable per-user data.
         if "speaker" in merged and "model_path" in merged["speaker"]:
             merged["speaker"]["model_path"] = str(
-                (project_root / merged["speaker"]["model_path"]).resolve()
+                resolver.resource(merged["speaker"]["model_path"])
+            )
+        if "vad" in merged and "model_path" in merged["vad"]:
+            merged["vad"]["model_path"] = str(
+                resolver.resource(merged["vad"]["model_path"])
             )
         if "embedding_path" in merged:
             merged["embedding_path"] = str(
-                (project_root / merged["embedding_path"]).resolve()
+                resolver.user_data(merged["embedding_path"])
             )
 
         return cls.model_validate(merged)

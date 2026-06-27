@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import logging
 import sys
-from pathlib import Path
+from logging.handlers import RotatingFileHandler
 
 from PyQt6.QtCore import QObject, Qt
 from PyQt6.QtGui import QAction, QColor, QIcon, QPainter, QPixmap
@@ -17,6 +17,7 @@ from PyQt6.QtWidgets import (
 from .app import FilterService
 from .config import AppConfig
 from .main_window import MainWindow
+from .paths import PathResolver
 
 log = logging.getLogger(__name__)
 
@@ -41,10 +42,11 @@ def _make_tray_icon(active: bool) -> QIcon:
 
 
 class VoiceprintTrayApp(QObject):
-    def __init__(self, cfg: AppConfig, project_root: Path):
+    def __init__(self, cfg: AppConfig, resolver: PathResolver):
         super().__init__()
         self.cfg = cfg
-        self.service = FilterService(cfg, project_root)
+        self.resolver = resolver
+        self.service = FilterService(cfg, resolver.project_root)
         self.window = MainWindow(self.service)
         self._build_tray()
 
@@ -111,20 +113,48 @@ class VoiceprintTrayApp(QObject):
         return QApplication.instance().exec()
 
 
+def _setup_logging(resolver: PathResolver, level: str) -> None:
+    """Console handler + rotating file handler under the user-data log dir.
+
+    The file handler is the durable record a non-technical user ships to a
+    bug report via the tray's "view logs" / "report problem" actions. In
+    dev mode it lands under ``<repo>/logs/``; frozen, under
+    ``%APPDATA%/voiceprint-filter/logs/``.
+    """
+    root = logging.getLogger()
+    root.setLevel(level)
+    # Wipe any prior basicConfig handlers so re-entry (e.g. tests) stays clean.
+    for h in list(root.handlers):
+        root.removeHandler(h)
+
+    fmt = logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s")
+
+    console = logging.StreamHandler()
+    console.setFormatter(fmt)
+    root.addHandler(console)
+
+    try:
+        log_path = resolver.user_data("logs", "voiceprint-filter.log")
+        file_handler = RotatingFileHandler(
+            log_path, maxBytes=1_000_000, backupCount=3, encoding="utf-8"
+        )
+        file_handler.setFormatter(fmt)
+        root.addHandler(file_handler)
+        log.info("Log file: %s", log_path)
+    except Exception:  # pragma: no cover — never let logging setup kill startup
+        log.exception("Could not attach file log handler; continuing with console only.")
+
+
 def run() -> int:
     """Module-level entry point used by main.py."""
     from .config import AppConfig as _Cfg
 
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
-    )
-
-    project_root = Path(__file__).resolve().parents[2]
-    cfg = _Cfg.load(project_root)
+    resolver = PathResolver()
+    cfg = _Cfg.load(resolver)
+    _setup_logging(resolver, cfg.log_level)
 
     app = QApplication.instance() or QApplication(sys.argv)
     app.setQuitOnLastWindowClosed(False)  # tray keeps the app alive
 
-    tray_app = VoiceprintTrayApp(cfg, project_root)
+    tray_app = VoiceprintTrayApp(cfg, resolver)
     return tray_app.run()

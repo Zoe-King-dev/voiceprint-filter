@@ -65,7 +65,7 @@ class FilterPipeline:
         self._frames_since_verify = 0
 
         self.vad = make_vad(
-            "models/silero_vad.onnx",
+            cfg.vad.model_path,
             threshold=cfg.vad.threshold,
             sample_rate=sr,
         )

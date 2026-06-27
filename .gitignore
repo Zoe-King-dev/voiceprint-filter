@@ -1,0 +1,30 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+*.spec.bak
+
+# Virtualenv
+.venv/
+venv/
+
+# Local models & enrollment (downloaded / generated, not shipped via git)
+models/*.onnx
+models/*.tar.*
+data/enrollment/*.npy
+
+# Local user config override
+config/user.yaml
+
+# Logs
+logs/
+*.log
+
+# IDE / OS
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db

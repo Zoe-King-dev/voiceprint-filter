@@ -11,6 +11,7 @@ vad:
   threshold: 0.5
   min_speech_ms: 250
   min_silence_ms: 100
+  model_path: "models/silero_vad.onnx"
 
 speaker:
   model_path: "models/3dspeaker_speech_campplus_sv_zh-cn_16k-common.onnx"
