@@ -19,12 +19,19 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          # Match the local dev venv (Python 3.12). The sherpa-onnx 1.13.3
+          # wheel ships cp311 + cp312, but 3.12 is what we actually test
+          # against and what catches the api change in SpeakerEmbeddingExtractor
+          # (compute() takes OnlineStream in 1.13+).
+          python-version: "3.12"
 
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
+          # pytest is not in requirements.txt (it's a dev-only dep) -- keep
+          # the explicit install here so the test step never silently
+          # skips on a future cleanup of requirements.
           pip install pytest
 
       - name: Download ONNX models
