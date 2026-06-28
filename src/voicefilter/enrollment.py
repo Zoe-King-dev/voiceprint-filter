@@ -93,12 +93,18 @@ class EnrollmentWizard:
         if self._cancel.is_set():
             raise EnrollmentError("Enrollment cancelled by user.")
 
-        # Sanity check: RMS should be non-trivial — if it's too quiet, warn.
+        # Sanity check: RMS should be non-trivial — if it's too quiet, the most
+        # common cause is recording from VB-CABLE's "CABLE Output" endpoint
+        # (which shows up as an input device but has no mic behind it), so
+        # call that out explicitly alongside the generic "speak louder" hint.
         rms = float(np.sqrt(np.mean(np.square(audio))))
         if rms < 0.005:
             raise EnrollmentError(
                 "Recording is too quiet (RMS < 0.005). "
-                "Check your microphone or speak louder."
+                "Most likely causes: (1) you selected a VB-CABLE virtual endpoint "
+                "as the recording source -- VB-CABLE has no physical microphone, "
+                "pick your real microphone instead; (2) the mic is muted or at "
+                "very low gain; (3) you need to speak louder / move closer."
             )
 
         log.info("Extracting enrollment embedding ...")

@@ -34,16 +34,31 @@ class AudioDevice:
         return f"[{self.idx}] {self.name} ({self.hostapi})"
 
 
+# Names of VB-CABLE's virtual endpoints. VB-CABLE is a one-way virtual
+# cable: "CABLE Input" is what we *write* to (filter pipeline output),
+# "CABLE Output" is what apps like 腾讯会议 *read* from as their mic.
+# Neither endpoint has a physical transducer behind it, so neither can
+# be used as a recording source — opening an InputStream on them yields
+# silence (or stale buffer residue). Hide them from the input list so
+# the user doesn't pick them by mistake during enrollment.
+_VB_CABLE_HINTS = ("cable input", "cable output")
+
+
+def _is_vb_cable_endpoint(name: str) -> bool:
+    low = name.lower()
+    return any(hint in low for hint in _VB_CABLE_HINTS)
+
+
 class AudioRouter:
     """Lists and resolves audio devices by name substring."""
 
     def list_input_devices(self) -> List[AudioDevice]:
-        return self._list(max_ch_filter="in")
+        return self._list(max_ch_filter="in", exclude_vb_cable=True)
 
     def list_output_devices(self) -> List[AudioDevice]:
-        return self._list(max_ch_filter="out")
+        return self._list(max_ch_filter="out", exclude_vb_cable=False)
 
-    def _list(self, max_ch_filter: str) -> List[AudioDevice]:
+    def _list(self, max_ch_filter: str, exclude_vb_cable: bool = False) -> List[AudioDevice]:
         devices = sd.query_devices()
         hostapis = sd.query_hostapis()
         out: List[AudioDevice] = []
@@ -52,6 +67,12 @@ class AudioRouter:
             if max_ch_filter == "in" and d["max_input_channels"] <= 0:
                 continue
             if max_ch_filter == "out" and d["max_output_channels"] <= 0:
+                continue
+            if exclude_vb_cable and _is_vb_cable_endpoint(d["name"]):
+                # VB-CABLE's "Output" endpoint shows up as an input in
+                # sounddevice (because meeting apps read it as a mic),
+                # but it's a one-way virtual pipe with no real mic
+                # behind it — recording from it returns silence.
                 continue
             out.append(
                 AudioDevice(
@@ -67,6 +88,12 @@ class AudioRouter:
     # --- matchers ---------------------------------------------------------
 
     def find_input(self, substring: str) -> AudioDevice:
+        if _is_vb_cable_endpoint(substring):
+            raise DeviceNotFoundError(
+                f"'{substring}' is a VB-CABLE virtual endpoint and cannot be used as a "
+                f"recording source (VB-CABLE has no physical microphone behind it). "
+                f"Pick your real microphone (e.g. 'Microphone', 'Headset Mic') instead."
+            )
         return self._find(self.list_input_devices(), substring, kind="input")
 
     def find_output(self, substring: str) -> AudioDevice:

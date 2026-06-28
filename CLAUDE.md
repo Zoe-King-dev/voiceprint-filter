@@ -67,6 +67,7 @@ scripts/  ──┐
 - **Pause = pure bypass** (`FilterPipeline.push` returns the frame unchanged, no VAD/verify work). Useful for "let everything through" mode but means no stats are emitted.
 - **Enrollment uses the same `SpeakerEngine.compute`** as verification — do not fork the embedding code. The wizard saves a 192-d `.npy` and immediately reloads it; raw audio is **never** persisted (privacy guarantee documented in README).
 - **VB-CABLE is required.** `AudioRouter.has_cable()` returns False until the driver is installed and the system has been rebooted (Windows re-enumerates devices after a reboot). `MainWindow` shows a red warning banner when it's missing.
+- **VB-CABLE endpoints are NOT recording sources.** VB-CABLE is a one-way virtual cable — `CABLE Input` is what we *write* to (filter pipeline output), `CABLE Output` is what meeting apps *read* from as their mic. Neither has a physical transducer behind it, so opening an InputStream on either returns silence / stale buffer residue (this looks like a "too quiet" enrollment error but is really "wrong device"). `AudioRouter.list_input_devices` filters VB-CABLE endpoints out, and `find_input("CABLE Output")` raises `DeviceNotFoundError` with an explicit hint.
 - **Microphone must match between enrollment and meeting use** — speaker embeddings are very sensitive to mic frequency response. README warns this; it is the #1 cause of false rejects.
 
 ### Module map (`src/voicefilter/`)

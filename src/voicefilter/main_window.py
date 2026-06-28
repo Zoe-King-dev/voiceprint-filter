@@ -47,7 +47,9 @@ class EnrollmentDialog(QMainWindow):
 
         intro = QLabel(
             "首次使用，请用日常说话音量朗读下方文本 20 秒。\n"
-            "建议在安静环境、与会议时同一只麦克风下录制。"
+            "建议在安静环境、与会议时同一只麦克风下录制。\n"
+            "⚠ 请选择你的真实麦克风（如「麦克风」「Headset Mic」）——\n"
+            "VB-CABLE 虚拟端点不支持反向录音。"
         )
         intro.setWordWrap(True)
         layout.addWidget(intro)
