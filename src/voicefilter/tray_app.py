@@ -2,12 +2,13 @@
 from __future__ import annotations
 
 import logging
+import math
 import sys
 import warnings
 from logging.handlers import RotatingFileHandler
 
-from PyQt6.QtCore import QObject, Qt
-from PyQt6.QtGui import QAction, QColor, QIcon, QPainter, QPixmap
+from PyQt6.QtCore import QObject, Qt, QTimer
+from PyQt6.QtGui import QAction, QColor, QIcon, QPainter, QPen, QPixmap
 from PyQt6.QtWidgets import (
     QApplication,
     QMenu,
@@ -19,27 +20,101 @@ from .app import FilterService
 from .config import AppConfig
 from .main_window import MainWindow
 from .paths import PathResolver
+from .theme import Colors
 
 log = logging.getLogger(__name__)
 
 
-def _make_tray_icon(active: bool) -> QIcon:
-    """Generate a simple colored-circle icon (no asset files needed)."""
-    pm = QPixmap(64, 64)
+# ----- Tray icon ----------------------------------------------------------
+
+# Six states the tray icon can communicate. Centralized so the icon painter
+# and the state→color mapping can't drift apart.
+_TRAY_STATES = {
+    "ok":        (Colors.STATE_OK,       "V"),  # actively filtering, voice is mine
+    "watch":     (Colors.STATE_WARN,     "V"),  # paused by user
+    "degraded":  (Colors.STATE_DEGRADED, "!"),  # device missing
+    "off":       (Colors.STATE_NEUTRAL,  "V"),  # stopped / not started
+    "no_enroll": (Colors.STATE_NEUTRAL,  "?"),  # never enrolled
+}
+
+
+def _make_tray_icon(state: str, pulse: float = 1.0) -> QIcon:
+    """Generate a polished tray icon programmatically (no asset files).
+
+    Design: a filled core circle + a glowing outer ring whose alpha is driven
+    by ``pulse`` (0..1). When ``pulse`` is animated down, the ring fades —
+    a gentle "breathing" effect that signals "I'm working" without being noisy.
+    """
+    color_hex, letter = _TRAY_STATES.get(state, _TRAY_STATES["off"])
+
+    size = 64
+    pm = QPixmap(size, size)
     pm.fill(Qt.GlobalColor.transparent)
     p = QPainter(pm)
     p.setRenderHint(QPainter.RenderHint.Antialiasing)
-    p.setBrush(QColor("#3a3" if active else "#888"))
+
+    # Outer ring — alpha animated. base 0.25 + 0.55*pulse keeps it always
+    # visible (so the icon never "disappears") but obviously breathing.
+    ring = QColor(color_hex)
+    ring.setAlphaF(max(0.0, min(1.0, 0.25 + 0.55 * pulse)))
+    pen = QPen(ring)
+    pen.setWidth(3)
+    p.setPen(pen)
+    p.setBrush(Qt.BrushStyle.NoBrush)
+    p.drawEllipse(4, 4, size - 8, size - 8)
+
+    # Core circle
     p.setPen(Qt.PenStyle.NoPen)
-    p.drawEllipse(8, 8, 48, 48)
+    p.setBrush(QColor(color_hex))
+    p.drawEllipse(12, 12, size - 24, size - 24)
+
+    # Letter
     p.setPen(QColor("white"))
     font = p.font()
     font.setBold(True)
-    font.setPointSize(20)
+    font.setPointSize(22 if letter == "V" else 26)
     p.setFont(font)
-    p.drawText(pm.rect(), Qt.AlignmentFlag.AlignCenter, "V")
+    p.drawText(pm.rect(), Qt.AlignmentFlag.AlignCenter, letter)
     p.end()
     return QIcon(pm)
+
+
+class _TrayPulse:
+    """Drives the running state's breathing-ring alpha.
+
+    A 1200 ms period was picked because faster reads as "alarm", slower as
+    "stalled". Phase advances every 60 ms (~17 fps) — plenty for an alpha
+    change on a 64×64 pixmap; Qt's QPixmap cache keeps it cheap.
+    """
+
+    PERIOD_MS = 1200
+    TICK_MS = 60
+
+    def __init__(self, tray: QSystemTrayIcon):
+        self._tray = tray
+        self._phase = 0.0
+        self._timer = QTimer()
+        self._timer.setInterval(self.TICK_MS)
+        self._timer.timeout.connect(self._tick)
+        self._active = False
+
+    def start(self) -> None:
+        self._active = True
+        if not self._timer.isActive():
+            self._timer.start()
+
+    def stop(self) -> None:
+        self._active = False
+        # Final frame: full opacity so the resting state looks intentional.
+        self._tray.setIcon(_make_tray_icon("ok", pulse=1.0))
+
+    def _tick(self) -> None:
+        self._phase = (self._phase + self.TICK_MS / self.PERIOD_MS * 2 * math.pi) % (
+            2 * math.pi
+        )
+        # Ease-in-out cosine — softer than raw sine.
+        s = 0.5 - 0.5 * math.cos(self._phase)
+        self._tray.setIcon(_make_tray_icon("ok", pulse=s))
 
 
 class VoiceprintTrayApp(QObject):
@@ -53,7 +128,9 @@ class VoiceprintTrayApp(QObject):
 
     def _build_tray(self) -> None:
         self.tray = QSystemTrayIcon(self)
-        self.tray.setIcon(_make_tray_icon(self.service.has_enrollment()))
+        self.tray.setIcon(
+            _make_tray_icon("no_enroll" if not self.service.has_enrollment() else "off")
+        )
         self.tray.setToolTip("Voiceprint Filter")
 
         menu = QMenu()
@@ -75,6 +152,7 @@ class VoiceprintTrayApp(QObject):
         self.tray.activated.connect(self._on_tray_activated)
         self.tray.show()
 
+        self.pulse = _TrayPulse(self.tray)
         self.service.state_changed.connect(self._sync_tray_state)
         self.service.error.connect(self._on_error)
 
@@ -94,15 +172,34 @@ class VoiceprintTrayApp(QObject):
             self.service.resume()
 
     def _sync_tray_state(self, msg: str) -> None:
-        active = "运行" in msg or "已恢复" in msg
-        self.tray.setIcon(_make_tray_icon(active))
+        # Map service-state text → tray icon state. Same precedence rules as
+        # the in-window badge so the two visual cues can never disagree.
+        if "丢失" in msg or ("等待" in msg and "恢复" in msg):
+            state = "degraded"
+            self.pulse.stop()
+        elif "运行" in msg or "已恢复" in msg:
+            state = "ok"
+            self.pulse.start()
+        elif "暂停" in msg:
+            state = "watch"
+            self.pulse.stop()
+        else:  # "已停止", "未启动", …
+            state = "off"
+            self.pulse.stop()
+
+        self.tray.setIcon(_make_tray_icon(state))
         self.tray.setToolTip(f"Voiceprint Filter — {msg}")
 
     def _on_error(self, msg: str) -> None:
         if self.tray.supportsMessages():
-            self.tray.showMessage("Voiceprint Filter 错误", msg, QSystemTrayIcon.MessageIcon.Critical)
+            self.tray.showMessage(
+                "Voiceprint Filter 错误",
+                msg,
+                QSystemTrayIcon.MessageIcon.Critical,
+            )
 
     def _quit(self) -> None:
+        self.pulse.stop()
         self.service.stop()
         QApplication.instance().quit()
 
@@ -110,7 +207,10 @@ class VoiceprintTrayApp(QObject):
         # Show window on first launch if no enrollment yet
         if not self.service.has_enrollment():
             self.window.show()
-            self.window.status_label.setText("首次启动 — 请先注册声纹。")
+            self.window.status_badge.set_state(
+                "●  首次启动 — 请先注册声纹。",
+                Colors.STATE_WARN,
+            )
         return QApplication.instance().exec()
 
 
@@ -161,6 +261,7 @@ def run() -> int:
     )
 
     from .config import AppConfig as _Cfg
+    from .theme import apply_theme
 
     resolver = PathResolver()
     cfg = _Cfg.load(resolver)
@@ -168,6 +269,7 @@ def run() -> int:
 
     app = QApplication.instance() or QApplication(sys.argv)
     app.setQuitOnLastWindowClosed(False)  # tray keeps the app alive
+    apply_theme(app)
 
     tray_app = VoiceprintTrayApp(cfg, resolver)
     return tray_app.run()

@@ -5,18 +5,23 @@ import logging
 from pathlib import Path
 from typing import Optional
 
-from PyQt6.QtCore import Qt, QTimer
-from PyQt6.QtGui import QAction, QColor, QPalette
+from PyQt6.QtCore import (
+    QEasingCurve,
+    QPoint,
+    QPropertyAnimation,
+    QTimer,
+    Qt,
+)
 from PyQt6.QtWidgets import (
     QComboBox,
     QDoubleSpinBox,
+    QGraphicsOpacityEffect,
     QHBoxLayout,
     QLabel,
     QMainWindow,
     QMessageBox,
     QProgressBar,
     QPushButton,
-    QSlider,
     QStatusBar,
     QTextEdit,
     QVBoxLayout,
@@ -25,8 +30,52 @@ from PyQt6.QtWidgets import (
 
 from .app import FilterService
 from .enrollment import EnrollmentError, EnrollmentWizard, PROMPT_TEXT
+from .theme import Colors, ScoreBar, SectionCard, Spacing, StatusBadge
 
 log = logging.getLogger(__name__)
+
+
+# Animation durations are picked to feel "responsive but not jumpy":
+#   - dialog entrance: 240ms — enough to register motion, short enough that
+#     the user isn't kept waiting to interact.
+#   - score bar color: 180ms — must finish before the next hop (500ms) so a
+#     fast speaker doesn't get mid-transition snaps.
+_ANIM_DIALOG_MS = 240
+_ANIM_SCORE_MS = 180
+
+
+def _fade_in(widget: QWidget, duration_ms: int = _ANIM_DIALOG_MS,
+             rise_px: int = 12) -> None:
+    """Play a 'soft entrance' — fade from 0→1 and rise by ``rise_px``.
+
+    This is the closest thing to a Framer-Motion ``initial={{opacity:0, y:12}}
+    animate={{opacity:1, y:0}}`` in PyQt6. We use QPropertyAnimation for both
+    the opacity (via QGraphicsOpacityEffect) and the window geometry.
+    """
+    eff = QGraphicsOpacityEffect(widget)
+    eff.setOpacity(0.0)
+    widget.setGraphicsEffect(eff)
+
+    fade = QPropertyAnimation(eff, b"opacity", widget)
+    fade.setDuration(duration_ms)
+    fade.setStartValue(0.0)
+    fade.setEndValue(1.0)
+    fade.setEasingCurve(QEasingCurve.Type.OutCubic)
+
+    end_pos = widget.pos()
+    start_pos = QPoint(end_pos.x(), end_pos.y() + rise_px)
+    widget.move(start_pos)
+    slide = QPropertyAnimation(widget, b"pos", widget)
+    slide.setDuration(duration_ms)
+    slide.setStartValue(start_pos)
+    slide.setEndValue(end_pos)
+    slide.setEasingCurve(QEasingCurve.Type.OutCubic)
+
+    fade.start(QPropertyAnimation.DeletionPolicy.DeleteWhenStopped)
+    slide.start(QPropertyAnimation.DeletionPolicy.DeleteWhenStopped)
+    # Keep references so GC doesn't kill the animations mid-flight.
+    widget._fade_anim = fade  # type: ignore[attr-defined]
+    widget._slide_anim = slide  # type: ignore[attr-defined]
 
 
 class EnrollmentDialog(QMainWindow):
@@ -44,14 +93,17 @@ class EnrollmentDialog(QMainWindow):
         central = QWidget(self)
         self.setCentralWidget(central)
         layout = QVBoxLayout(central)
+        layout.setContentsMargins(Spacing.LG, Spacing.LG, Spacing.LG, Spacing.LG)
+        layout.setSpacing(Spacing.MD)
 
         intro = QLabel(
-            "首次使用，请用日常说话音量朗读下方文本 20 秒。\n"
+            "首次使用,请用日常说话音量朗读下方文本 20 秒。\n"
             "建议在安静环境、与会议时同一只麦克风下录制。\n"
-            "⚠ 请选择你的真实麦克风（如「麦克风」「Headset Mic」）——\n"
+            "⚠ 请选择你的真实麦克风(如「麦克风」「Headset Mic」)——\n"
             "VB-CABLE 虚拟端点不支持反向录音。"
         )
         intro.setWordWrap(True)
+        intro.setProperty("role", "secondary")
         layout.addWidget(intro)
 
         prompt = QTextEdit()
@@ -71,9 +123,11 @@ class EnrollmentDialog(QMainWindow):
         layout.addWidget(self.progress)
 
         self.status = QLabel("准备就绪。")
+        self.status.setProperty("role", "secondary")
         layout.addWidget(self.status)
 
         btn_row = QHBoxLayout()
+        btn_row.setSpacing(Spacing.SM)
         self.btn_mic = QComboBox()
         for d in service.list_input_devices():
             self.btn_mic.addItem(f"[{d.idx}] {d.name}", userData=d)
@@ -81,6 +135,7 @@ class EnrollmentDialog(QMainWindow):
         btn_row.addWidget(self.btn_mic, 1)
 
         self.btn_start = QPushButton("开始录制")
+        self.btn_start.setProperty("role", "primary")
         self.btn_start.clicked.connect(self._start)
         btn_row.addWidget(self.btn_start)
 
@@ -90,6 +145,11 @@ class EnrollmentDialog(QMainWindow):
         btn_row.addWidget(self.btn_cancel)
 
         layout.addLayout(btn_row)
+
+        # Defer the entrance animation until after the dialog is on-screen so
+        # its initial geometry is set; otherwise the slide starts from a stale
+        # position computed before show().
+        QTimer.singleShot(0, lambda: _fade_in(self))
 
     def _start(self) -> None:
         dev = self.btn_mic.currentData()
@@ -168,7 +228,7 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.service = service
         self.setWindowTitle("声纹过滤 — Voiceprint Filter")
-        self.resize(720, 520)
+        self.resize(760, 600)
         self._build_ui()
         self._wire_signals()
         self._refresh_status()
@@ -182,30 +242,44 @@ class MainWindow(QMainWindow):
         central = QWidget(self)
         self.setCentralWidget(central)
         root = QVBoxLayout(central)
+        root.setContentsMargins(Spacing.LG, Spacing.LG, Spacing.LG, Spacing.LG)
+        root.setSpacing(Spacing.MD)
 
-        # Device pickers
+        # ----- Devices section -----
+        dev_card = SectionCard("设备", self)
         dev_row = QHBoxLayout()
+        dev_row.setSpacing(Spacing.SM)
         self.in_combo = QComboBox()
         self.out_combo = QComboBox()
         self._populate_devices()
         dev_row.addWidget(QLabel("真实麦克风:"))
         dev_row.addWidget(self.in_combo, 1)
+        dev_row.addSpacing(Spacing.MD)
         dev_row.addWidget(QLabel("虚拟麦克风:"))
         dev_row.addWidget(self.out_combo, 1)
-        root.addLayout(dev_row)
+        dev_card.body_layout.addLayout(dev_row)
 
         if not self.service.has_cable():
-            warn = QLabel(
-                "⚠ 未检测到 VB-CABLE 设备。请从 vb-audio.com/Cable 下载安装，"
-                "然后重启电脑，再回到本程序。"
+            self.warn_label = QLabel(
+                "⚠ 未检测到 VB-CABLE 设备。请从 vb-audio.com/Cable 下载安装,"
+                "然后重启电脑,再回到本程序。"
             )
-            warn.setStyleSheet("color: #b00; padding: 6px;")
-            warn.setWordWrap(True)
-            root.addWidget(warn)
+            self.warn_label.setWordWrap(True)
+            self.warn_label.setStyleSheet(
+                f"color: {Colors.STATE_WARN}; padding: 6px 8px;"
+                f"background: rgba(243,182,100,0.08);"
+                f"border-radius: 4px;"
+            )
+            dev_card.body_layout.addWidget(self.warn_label)
 
-        # Start/stop
+        root.addWidget(dev_card)
+
+        # ----- Controls section -----
+        ctrl_card = SectionCard("控制", self)
         ctrl_row = QHBoxLayout()
+        ctrl_row.setSpacing(Spacing.SM)
         self.btn_start = QPushButton("启动过滤")
+        self.btn_start.setProperty("role", "primary")
         self.btn_start.clicked.connect(self._on_start)
         self.btn_stop = QPushButton("停止")
         self.btn_stop.setEnabled(False)
@@ -220,22 +294,28 @@ class MainWindow(QMainWindow):
         ctrl_row.addWidget(self.btn_pause)
         ctrl_row.addStretch(1)
         ctrl_row.addWidget(self.btn_enroll)
-        root.addLayout(ctrl_row)
+        ctrl_card.body_layout.addLayout(ctrl_row)
+        root.addWidget(ctrl_card)
 
-        # Score bar
-        score_label = QLabel("实时声纹相似度（绿色=我 / 红色=他人 / 灰色=静音）")
-        root.addWidget(score_label)
-        self.score_bar = QProgressBar()
+        # ----- Score / decision section -----
+        score_card = SectionCard("声纹判定", self)
+        score_caption = QLabel("实时声纹相似度")
+        score_caption.setProperty("role", "muted")
+        score_card.body_layout.addWidget(score_caption)
+
+        self.score_bar = ScoreBar()
         self.score_bar.setRange(-100, 100)
         self.score_bar.setValue(0)
         self.score_bar.setFormat("%v / 100")
-        root.addWidget(self.score_bar)
+        score_card.body_layout.addWidget(self.score_bar)
+
         self.score_value = QLabel("—")
         self.score_value.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        root.addWidget(self.score_value)
+        self.score_value.setProperty("role", "secondary")
+        score_card.body_layout.addWidget(self.score_value)
 
-        # Threshold & gain controls
         thr_row = QHBoxLayout()
+        thr_row.setSpacing(Spacing.SM)
         thr_row.addWidget(QLabel("判定阈值:"))
         self.thr_spin = QDoubleSpinBox()
         self.thr_spin.setRange(0.30, 0.95)
@@ -251,18 +331,27 @@ class MainWindow(QMainWindow):
         self.other_gain.setValue(self.service.cfg.speaker.other_gain_db)
         self.other_gain.valueChanged.connect(self._on_other_gain_changed)
         thr_row.addWidget(self.other_gain)
-        root.addLayout(thr_row)
+        score_card.body_layout.addLayout(thr_row)
 
-        # Log
+        root.addWidget(score_card)
+
+        # ----- Log section -----
+        log_card = SectionCard("日志", self)
         self.log_view = QTextEdit()
         self.log_view.setReadOnly(True)
         self.log_view.setStyleSheet("font-family: Consolas, monospace; font-size: 11px;")
-        root.addWidget(self.log_view, 1)
+        log_card.body_layout.addWidget(self.log_view)
+        root.addWidget(log_card, 1)
 
+        # ----- Status bar with badge -----
         sb = QStatusBar()
         self.setStatusBar(sb)
-        self.status_label = QLabel("未启动")
-        sb.addWidget(self.status_label)
+        self.status_badge = StatusBadge("●  未启动")
+        sb.addWidget(self.status_badge)
+        self.status_metrics = QLabel("")
+        self.status_metrics.setProperty("role", "secondary")
+        self.status_metrics.setStyleSheet(f"color: {Colors.TEXT_SECONDARY}; padding-right: 8px;")
+        sb.addPermanentWidget(self.status_metrics)
 
     def _populate_devices(self) -> None:
         for d in self.service.list_input_devices():
@@ -325,29 +414,44 @@ class MainWindow(QMainWindow):
         score_pct = int(max(-1.0, min(1.0, stats.last_score)) * 100)
         self.score_bar.setValue(score_pct)
         thr_pct = int(self.service.cfg.speaker.threshold * 100)
+        # Pick a semantic state color rather than embedding raw hex in slots.
         if not stats.last_is_speech:
-            color = "#bbb"
+            color = Colors.STATE_NEUTRAL
+            label = "静音"
         elif stats.last_is_me:
-            color = "#3a3"
+            color = Colors.STATE_OK
+            label = "ME"
         else:
-            color = "#c33"
-        self.score_bar.setStyleSheet(
-            f"QProgressBar::chunk {{ background-color: {color}; }}"
-        )
+            color = Colors.STATE_BAD
+            label = "OTHER"
+        # Smoothly crossfade the score-bar chunk color instead of snapping.
+        self.score_bar.set_state_color(color)
+
         if stats.last_is_speech:
             self.score_value.setText(
                 f"score={stats.last_score:+.3f}  thr={self.service.cfg.speaker.threshold:.2f}  "
-                f"{'ME' if stats.last_is_me else 'OTHER'}  infer={stats.last_infer_ms:.0f}ms"
+                f"{label}  infer={stats.last_infer_ms:.0f}ms"
             )
         else:
             self.score_value.setText("静音")
-        self.status_label.setText(
+        self.status_metrics.setText(
             f"frames={stats.frames_processed}  me={stats.accepted_frames}  "
             f"rej={stats.rejected_frames}  gain={stats.last_gain_db:.1f}dB"
         )
 
     def _on_state(self, msg: str) -> None:
-        self.status_label.setText(msg)
+        # Map service state text → (badge text, color). Centralizing this here
+        # means new states only need one entry instead of scattered updates.
+        text = f"●  {msg}"
+        if ("丢失" in msg) or ("等待" in msg and "恢复" in msg):
+            color = Colors.STATE_DEGRADED
+        elif "运行" in msg or "已恢复" in msg:
+            color = Colors.STATE_OK
+        elif "暂停" in msg:
+            color = Colors.STATE_WARN
+        else:  # "已停止", "未启动", "未注册", …
+            color = Colors.STATE_NEUTRAL
+        self.status_badge.set_state(text, color)
 
     def _on_error(self, msg: str) -> None:
         self._append_log(f"ERROR: {msg}")
@@ -360,7 +464,7 @@ class MainWindow(QMainWindow):
         if not self.service.has_enrollment():
             self.btn_start.setEnabled(True)  # can start, will run paused
             self.score_value.setText("未注册声纹 — 录制后才能识别。")
-            self.score_value.setStyleSheet("color: #888;")
+            self.score_value.setStyleSheet(f"color: {Colors.STATE_WARN};")
 
     def _refresh_stats(self) -> None:
         # Placeholder for periodic refresh; main updates come via signal.
