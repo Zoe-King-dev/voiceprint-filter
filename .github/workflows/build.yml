@@ -9,6 +9,7 @@ on:
 
 permissions:
   contents: write   # needed by softprops/action-gh-release to cut a Release on tag
+  id-token: write   # needed by sigstore keyless signing (OIDC token from GHA)
 
 jobs:
   windows:
@@ -57,18 +58,48 @@ jobs:
             Write-Host "::warning::one-file exe not found at $dist; nothing to stage"
           }
 
+      - name: Sign exe with Sigstore (keyless, transparency log)
+        # Sigstore produces a detached .sig + .bundle that proves this exe
+        # was built by this GitHub Actions run at this commit. This does NOT
+        # embed an Authenticode signature in the PE header, so it will NOT
+        # suppress Windows SmartScreen's first-run warning on its own -- see
+        # README "首次运行" section for the user-facing guidance. What it
+        # DOES provide: tamper-evidence and a verifiable build provenance
+        # (anyone can check the .bundle against the Rekor transparency log
+        # to confirm the exe came from this repo's CI, not a repackaged
+        # imposter). Only sign on tag builds (the artifact we publish).
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          pip install sigstore
+          $exe = "voiceprint-filter-${{ github.ref_name }}.exe"
+          if (Test-Path $exe) {
+            python -m sigstore sign $exe
+            Write-Host "Signed $exe -> $exe.sig + $exe.bundle (Rekor transparency log)"
+          } else {
+            Write-Host "::warning::exe to sign not found ($exe); skipping sigstore step"
+          }
+
       - name: Upload build artifact
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: voiceprint-filter-windows
-          path: dist/
+          path: |
+            dist/
+            voiceprint-filter-*.exe
+            voiceprint-filter-*.sig
+            voiceprint-filter-*.bundle
           if-no-files-found: warn
 
       - name: Create GitHub Release on tag
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
-          files: voiceprint-filter-${{ github.ref_name }}.exe
+          # Attach the exe plus its Sigstore detached signature + bundle so
+          # users can verify build provenance (see README "验证签名").
+          files: |
+            voiceprint-filter-${{ github.ref_name }}.exe
+            voiceprint-filter-${{ github.ref_name }}.exe.sig
+            voiceprint-filter-${{ github.ref_name }}.exe.sig.bundle
           generate_release_notes: true
           draft: true   # review the build before publishing

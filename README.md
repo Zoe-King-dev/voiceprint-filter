@@ -15,10 +15,34 @@
 > 需要从 [Releases](../../releases) 下载打包好的 `voiceprint-filter.exe`。首次发布前可先用下方"从源码运行"。
 
 1. **装 VB-CABLE**（必须，免费）：到 <https://vb-audio.com/Cable/> 下载 `VBCABLE_Driver_Pack43.zip` → 解压 → 右键 `VBCABLE_Setup_x64.exe` **以管理员身份运行** → Install → **重启电脑**。
-2. **下载并运行** `voiceprint-filter.exe`。首次启动会检测 VB-CABLE 和声纹模型，缺失会弹窗引导。
-3. **注册声纹**：用日常说话音量朗读 20 秒。程序只保存 192 个浮点数（声纹向量），**不保存原始录音**。
-4. **在会议里选麦克风**：腾讯会议 → 设置 → 音频 → 麦克风选 `CABLE Output (VB-Audio Virtual Cable)`。关闭腾讯会议自带的"麦克风降噪/声音美化"。
-5. 看托盘图标变绿 = 正在过滤。别人说话会被压到几乎听不见，你说话原样通过。
+2. **下载** `voiceprint-filter-vX.Y.Z.exe`（从 [Releases](../../releases)）。
+3. **首次运行 — Windows 安全提示怎么处理**：
+
+   exe 没有花钱买商业代码签名证书，所以 Windows Defender SmartScreen 第一次会显示「已保护你的电脑 — 发行者未知」。**这不是检测到病毒**，是所有未签名 exe 的默认行为。放行步骤：
+   - 在「已保护你的电脑」窗口点 **「更多信息」**
+   - 出现「仍要运行 (Run anyway)」按钮后点它
+   - 之后这台机器不会再为同一个 exe 弹这个窗（SmartScreen 会记住已放行）
+
+   想确认下载没被篡改？见下方 [验证签名（可选）](#验证签名可选)。
+4. **运行** `voiceprint-filter-vX.Y.Z.exe`。首次启动会检测 VB-CABLE 和声纹模型，缺失会弹窗引导。
+5. **注册声纹**：用日常说话音量朗读。录满 20 秒会自动结束，也可以读完后点「完成录制」提前结束（至少 5 秒）。程序只保存 192 个浮点数（声纹向量），**不保存原始录音**。
+6. **在会议里选麦克风**：腾讯会议 → 设置 → 音频 → 麦克风选 `CABLE Output (VB-Audio Virtual Cable)`。关闭腾讯会议自带的"麦克风降噪/声音美化"。
+7. 看托盘图标变绿 = 正在过滤。别人说话会被压到几乎听不见，你说话原样通过。
+
+### 验证签名（可选）
+
+每次打 tag 触发的 GitHub Actions 构建会用 [Sigstore](https://www.sigstore.dev/) 给 exe 做透明签名，Release 里附带 `.sig` 和 `.sig.bundle`。这套签名**不嵌进 exe 本体**（所以不消除上面那个 SmartScreen 提示），但它把「这个 exe 由本仓库 CI 在 commit X 构建」的证明写进 Rekor 公开透明日志——你可以验证下载的 exe 没被中途换包。
+
+```bash
+pip install sigstore
+# 下载 exe、.sig、.sig.bundle 三个文件到同一目录后：
+python -m sigstore verify voiceprint-filter-vX.Y.Z.exe \
+  --bundle voiceprint-filter-vX.Y.Z.exe.sig.bundle \
+  --cert-identity https://github.com/Zoe-King-dev/voiceprint-filter/.github/workflows/build.yml@refs/tags/vX.Y.Z \
+  --cert-oidc-issuer https://token.actions.githubusercontent.com
+```
+
+通过 = 这个 exe 确实来自本仓库的 CI 构建。
 
 ## 从源码运行（开发者 / 高级用户）
 
