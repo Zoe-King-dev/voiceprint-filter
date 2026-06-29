@@ -78,13 +78,26 @@ class EnrollmentWizard:
         self.recorder = recorder or EnrollmentRecorder()
         self.on_progress = on_progress  # (elapsed_sec, latest_chunk) for VU meter
         self._cancel = threading.Event()
+        self._finish = threading.Event()
 
     def cancel(self) -> None:
+        """Abort the recording — no embedding is extracted."""
         self._cancel.set()
+
+    def finish(self) -> None:
+        """Stop recording early and proceed to extract the embedding.
+
+        Lets the user wrap up the 20s prompt as soon as they're done reading,
+        instead of forcing them to wait the full duration. Distinct from
+        ``cancel()`` (which discards the audio): ``finish()`` keeps what's
+        been captured so far and feeds it to the embedding extractor.
+        """
+        self._finish.set()
 
     def run(self, mic_idx: int, save_path: str | Path) -> np.ndarray:
         """Record + extract + save. Returns the embedding."""
         self._cancel.clear()
+        self._finish.clear()
         try:
             audio = self._record_with_progress(mic_idx)
         except Exception as e:
@@ -138,7 +151,16 @@ class EnrollmentWizard:
             blocksize=chunk_frames,
             dtype="float32",
         ) as stream:
+            # Stop when: full duration captured, OR user hits "finish", OR
+            # user hits "cancel". We do NOT stop on _finish below the
+            # minimum usable length -- SpeakerEngine.extract_embedding
+            # returns zeros below 300ms, and a sub-second recording gives
+            # a fragile embedding. 5s is the EnrollmentRecorder floor and
+            # also a sane "you read enough" threshold.
+            min_frames = 5 * sr
             while captured < total_frames and not self._cancel.is_set():
+                if self._finish.is_set() and captured >= min_frames:
+                    break
                 if time.monotonic() > deadline:
                     raise EnrollmentError("Recording timed out.")
                 data, _ = stream.read(chunk_frames)

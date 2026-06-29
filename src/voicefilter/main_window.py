@@ -97,7 +97,8 @@ class EnrollmentDialog(QMainWindow):
         layout.setSpacing(Spacing.MD)
 
         intro = QLabel(
-            "首次使用,请用日常说话音量朗读下方文本 20 秒。\n"
+            "首次使用,请用日常说话音量朗读下方文本。\n"
+            "录满 20 秒会自动结束;也可以读完后点「完成录制」提前结束(至少 5 秒)。\n"
             "建议在安静环境、与会议时同一只麦克风下录制。\n"
             "⚠ 请选择你的真实麦克风(如「麦克风」「Headset Mic」)——\n"
             "VB-CABLE 虚拟端点不支持反向录音。"
@@ -139,6 +140,13 @@ class EnrollmentDialog(QMainWindow):
         self.btn_start.clicked.connect(self._start)
         btn_row.addWidget(self.btn_start)
 
+        self.btn_finish = QPushButton("完成录制")
+        self.btn_finish.setProperty("role", "primary")
+        self.btn_finish.setEnabled(False)
+        self.btn_finish.setToolTip("录够即可提前结束(最少 5 秒),无需等满 20 秒。")
+        self.btn_finish.clicked.connect(self._finish)
+        btn_row.addWidget(self.btn_finish)
+
         self.btn_cancel = QPushButton("取消")
         self.btn_cancel.setEnabled(False)
         self.btn_cancel.clicked.connect(self._cancel)
@@ -158,6 +166,7 @@ class EnrollmentDialog(QMainWindow):
             return
         self.btn_start.setEnabled(False)
         self.btn_mic.setEnabled(False)
+        self.btn_finish.setEnabled(True)
         self.btn_cancel.setEnabled(True)
         self.progress.setValue(0)
         self.level.setValue(0)
@@ -186,6 +195,7 @@ class EnrollmentDialog(QMainWindow):
                 self.status.setText(f"失败: {e}")
                 self.btn_start.setEnabled(True)
                 self.btn_mic.setEnabled(True)
+                self.btn_finish.setEnabled(False)
                 self.btn_cancel.setEnabled(False)
                 return
             except Exception as e:  # pragma: no cover
@@ -193,6 +203,7 @@ class EnrollmentDialog(QMainWindow):
                 self.status.setText(f"内部错误: {e}")
                 self.btn_start.setEnabled(True)
                 self.btn_mic.setEnabled(True)
+                self.btn_finish.setEnabled(False)
                 self.btn_cancel.setEnabled(False)
                 return
             # Re-load into service's engine
@@ -201,6 +212,7 @@ class EnrollmentDialog(QMainWindow):
             self.btn_start.setText("重新录制")
             self.btn_start.setEnabled(True)
             self.btn_mic.setEnabled(True)
+            self.btn_finish.setEnabled(False)
             self.btn_cancel.setEnabled(False)
             self.service.resume()
 
@@ -210,6 +222,15 @@ class EnrollmentDialog(QMainWindow):
     def _cancel(self) -> None:
         if self._wizard is not None:
             self._wizard.cancel()
+
+    def _finish(self) -> None:
+        # Tell the worker to stop capturing at the next chunk boundary and
+        # proceed to embedding extraction. Disabled immediately so the user
+        # can't double-tap it; the worker re-enables buttons on completion.
+        if self._wizard is not None:
+            self.btn_finish.setEnabled(False)
+            self.status.setText("正在结束录制,提取声纹...")
+            self._wizard.finish()
 
     def _on_progress(self, elapsed: float, chunk) -> None:
         # update from worker thread — use Qt signals in production, but
