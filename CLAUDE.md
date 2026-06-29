@@ -19,7 +19,8 @@ pip install -r requirements.txt
 python scripts/download_models.py        # downloads 2 ONNX models into ./models/
 
 # run the app
-python main.py                           # tray + main window; auto-opens window on first launch
+python main.py                           # tray + main window; auto-opens window only on first launch (no enrollment yet), otherwise starts minimized to tray
+python main.py --show                    # dev/test: force the main window to the foreground on launch (skip hunting for the tray icon)
 
 # self-test the speaker engine end-to-end
 python scripts/verify_pipeline.py --record       # records two 10s clips from default mic, prints scores

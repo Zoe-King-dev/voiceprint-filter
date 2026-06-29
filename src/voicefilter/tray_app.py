@@ -230,14 +230,21 @@ class VoiceprintTrayApp(QObject):
         self.service.stop()
         QApplication.instance().quit()
 
-    def run(self) -> int:
-        # Show window on first launch if no enrollment yet
-        if not self.service.has_enrollment():
+    def run(self, show_window: bool = False) -> int:
+        # Show the main window on first launch (no enrollment yet), or when
+        # the caller explicitly asks (e.g. `python main.py --show` during
+        # dev/test). Otherwise the app starts minimized to the tray -- which
+        # is correct for a frozen exe in normal use but confusing when you're
+        # iterating on the UI and expect to see something on launch.
+        if show_window or not self.service.has_enrollment():
             self.window.show()
-            self.window.status_badge.set_state(
-                "●  首次启动 — 请先注册声纹。",
-                Colors.STATE_WARN,
-            )
+            self.window.raise_()
+            self.window.activateWindow()
+            if not self.service.has_enrollment():
+                self.window.status_badge.set_state(
+                    "●  首次启动 — 请先注册声纹。",
+                    Colors.STATE_WARN,
+                )
         return QApplication.instance().exec()
 
 

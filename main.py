@@ -15,7 +15,13 @@ def main() -> int:
 
     from voicefilter.tray_app import run
 
-    return run()
+    # --show forces the main window to the foreground on launch, which is
+    # what you want when developing/testing (otherwise the app starts
+    # minimized to the tray and you have to double-click the tray icon to
+    # see anything). Without the flag, frozen-exe behavior is preserved:
+    # show only on first launch (no enrollment yet).
+    show_window = "--show" in sys.argv[1:]
+    return run(show_window=show_window)
 
 
 if __name__ == "__main__":
