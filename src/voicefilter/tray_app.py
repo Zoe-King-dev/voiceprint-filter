@@ -280,8 +280,14 @@ def _setup_logging(resolver: PathResolver, level: str) -> None:
         log.exception("Could not attach file log handler; continuing with console only.")
 
 
-def run() -> int:
-    """Module-level entry point used by main.py."""
+def run(show_window: bool = False) -> int:
+    """Module-level entry point used by main.py.
+
+    ``show_window=True`` forces the main window to the foreground on launch
+    (dev/test convenience: ``python main.py --show``). Default False
+    preserves the frozen-exe behavior of starting minimized to the tray
+    once enrollment exists.
+    """
     # Silence pydantic's 'Field "model_path" has conflict with protected namespace
     # "model_"' warning. We've already opted every config class out of the namespace
     # (ConfigDict(protected_namespaces=())), but PyInstaller's frozen bundle appears
@@ -306,4 +312,4 @@ def run() -> int:
     apply_theme(app)
 
     tray_app = VoiceprintTrayApp(cfg, resolver)
-    return tray_app.run()
+    return tray_app.run(show_window=show_window)
