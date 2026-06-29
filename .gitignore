@@ -34,3 +34,6 @@ Thumbs.db
 
 # Local design notes / scratch (not part of source)
 *-design-*.md
+
+# VS Code Local History extension artifacts
+.history/

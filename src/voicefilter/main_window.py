@@ -143,7 +143,7 @@ class EnrollmentDialog(QMainWindow):
         self.btn_finish = QPushButton("完成录制")
         self.btn_finish.setProperty("role", "primary")
         self.btn_finish.setEnabled(False)
-        self.btn_finish.setToolTip("录够即可提前结束(最少 5 秒),无需等满 20 秒。")
+        self.btn_finish.setToolTip("录够5秒以上即可提前结束。")
         self.btn_finish.clicked.connect(self._finish)
         btn_row.addWidget(self.btn_finish)
 
