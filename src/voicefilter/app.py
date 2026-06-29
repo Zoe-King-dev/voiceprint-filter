@@ -31,6 +31,10 @@ class FilterService(QObject):
     state_changed = pyqtSignal(str)     # human-readable status
     error = pyqtSignal(str)
     log = pyqtSignal(str)
+    # Fired when an enrollment is freshly written + loaded into the engine,
+    # so the UI can surface a clear "you're enrolled, here's the next step"
+    # state instead of silently flipping to "运行中" with no streams running.
+    enrollment_completed = pyqtSignal()
 
     def __init__(self, cfg: AppConfig, project_root: Path):
         super().__init__()
@@ -110,7 +114,42 @@ class FilterService(QObject):
             return
         if self.pipeline is not None:
             self.pipeline.resume()
-        self._emit_state("运行中")
+            self._emit_state("运行中")
+        else:
+            # No pipeline means the user hasn't pressed "启动过滤" yet.
+            # Emitting "运行中" here is a lie — nothing is running — and
+            # it paints the status badge green while no audio flows, which
+            # reads as "stuck / did it fail?". Be honest about the state.
+            if self.engine.is_enrolled():
+                self._emit_state("已注册 — 等待启动过滤")
+            else:
+                self._emit_state("未注册 — 请先录制声纹")
+
+    def mark_enrollment_loaded(self) -> None:
+        """Called by the enrollment wizard after a fresh embedding is saved.
+
+        Distinct from ``resume()``: enrollment can complete while no audio
+        pipeline is running (the user enrolled from the dialog without first
+        pressing "启动过滤"). Calling ``resume()`` in that case used to emit
+        a misleading "运行中" with no streams attached. This method instead
+        reloads the embedding, fires ``enrollment_completed`` so the UI can
+        surface an unambiguous success state, and emits an honest status
+        that tells the user what to do next.
+        """
+        try:
+            self.engine.load_enrollment(self.embedding_path())
+        except Exception as e:
+            self._emit_error(f"注册成功但加载失败：{e}")
+            return
+        self._emit_log("✅ 声纹注册成功。点击「启动过滤」开始使用。")
+        self.enrollment_completed.emit()
+        # Reflect the real state: enrolled, but not filtering yet (unless a
+        # pipeline happens to already be running, in which case resume it).
+        if self.pipeline is not None and not self._user_paused:
+            self.pipeline.resume()
+            self._emit_state("运行中")
+        else:
+            self._emit_state("已注册 — 等待启动过滤")
 
     def start(self, in_substring: str, out_substring: str) -> None:
         """Start the audio streams. Safe to call once; subsequent calls restart."""

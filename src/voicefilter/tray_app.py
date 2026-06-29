@@ -155,6 +155,7 @@ class VoiceprintTrayApp(QObject):
         self.pulse = _TrayPulse(self.tray)
         self.service.state_changed.connect(self._sync_tray_state)
         self.service.error.connect(self._on_error)
+        self.service.enrollment_completed.connect(self._on_enrollment_completed)
 
     def _on_tray_activated(self, reason) -> None:
         if reason == QSystemTrayIcon.ActivationReason.Trigger:
@@ -180,6 +181,12 @@ class VoiceprintTrayApp(QObject):
         elif "运行" in msg or "已恢复" in msg:
             state = "ok"
             self.pulse.start()
+        elif "已注册" in msg:
+            # Enrolled but not filtering yet — show a calm OK-color icon
+            # without the breathing pulse (pulse means "audio is flowing",
+            # which it isn't here).
+            state = "off"
+            self.pulse.stop()
         elif "暂停" in msg:
             state = "watch"
             self.pulse.stop()
@@ -189,6 +196,26 @@ class VoiceprintTrayApp(QObject):
 
         self.tray.setIcon(_make_tray_icon(state))
         self.tray.setToolTip(f"Voiceprint Filter — {msg}")
+
+    def _on_enrollment_completed(self) -> None:
+        """Fresh enrollment saved. Toast the user via the tray so they see
+        an unambiguous success even if the enrollment dialog / main window
+        is minimized. This is the fix for the "注册完看不到任何进展" problem
+        -- previously the only feedback was a green "运行中" badge with no
+        streams running, which read as "stuck" for an hour.
+        """
+        if self.tray.supportsMessages():
+            self.tray.showMessage(
+                "Voiceprint Filter",
+                "✅ 声纹注册成功。点击「启动过滤」开始使用。",
+                QSystemTrayIcon.MessageIcon.Information,
+            )
+        # Make sure the tray icon is not still stuck on the "?" no_enroll
+        # state from first launch -- _sync_tray_state will have run via the
+        # state_changed signal mark_enrollment_loaded emits, but be explicit.
+        if not self.service.is_running():
+            self.tray.setIcon(_make_tray_icon("off"))
+            self.tray.setToolTip("Voiceprint Filter — 已注册 — 等待启动过滤")
 
     def _on_error(self, msg: str) -> None:
         if self.tray.supportsMessages():

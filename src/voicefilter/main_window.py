@@ -206,15 +206,17 @@ class EnrollmentDialog(QMainWindow):
                 self.btn_finish.setEnabled(False)
                 self.btn_cancel.setEnabled(False)
                 return
-            # Re-load into service's engine
-            self.service.engine.load_enrollment(self.service.embedding_path())
+            # Re-load into service's engine and fire the enrollment-completed
+            # signal so the main window surfaces a clear success state. Do NOT
+            # call service.resume() here -- if no pipeline is running yet that
+            # would emit a misleading "运行中" with no streams attached.
+            self.service.mark_enrollment_loaded()
             self.status.setText("✅ 注册完成！可以关闭此窗口。")
             self.btn_start.setText("重新录制")
             self.btn_start.setEnabled(True)
             self.btn_mic.setEnabled(True)
             self.btn_finish.setEnabled(False)
             self.btn_cancel.setEnabled(False)
-            self.service.resume()
 
         self._thread = threading.Thread(target=worker, daemon=True)
         self._thread.start()
@@ -395,6 +397,7 @@ class MainWindow(QMainWindow):
         self.service.state_changed.connect(self._on_state)
         self.service.error.connect(self._on_error)
         self.service.log.connect(self._append_log)
+        self.service.enrollment_completed.connect(self._on_enrollment_completed)
 
     # --- slots ------------------------------------------------------------
 
@@ -468,11 +471,38 @@ class MainWindow(QMainWindow):
             color = Colors.STATE_DEGRADED
         elif "运行" in msg or "已恢复" in msg:
             color = Colors.STATE_OK
+        elif "已注册" in msg:
+            # Just finished enrollment but not filtering yet. OK color says
+            # "you succeeded" without the "运行中" green that implies audio
+            # is flowing -- which it isn't until the user hits 启动过滤.
+            color = Colors.STATE_OK
         elif "暂停" in msg:
             color = Colors.STATE_WARN
         else:  # "已停止", "未启动", "未注册", …
             color = Colors.STATE_NEUTRAL
         self.status_badge.set_state(text, color)
+
+    def _on_enrollment_completed(self) -> None:
+        """Fresh enrollment saved + loaded. Surface an unambiguous success.
+
+        Before this signal existed, the enrollment dialog called
+        service.resume() which (with no pipeline running) emitted "运行中"
+        and painted the status badge green -- while no audio was actually
+        flowing. Users saw a green "运行中" that never advanced for an hour
+        and assumed the app had silently failed. Now we instead show a
+        clear "注册成功,下一步启动过滤" prompt and nudge the start button.
+        """
+        # Clear the pre-enrollment warning styling on the score line.
+        self.score_value.setStyleSheet("")
+        self.score_value.setText(
+            "✅ 声纹注册成功 — 点击「启动过滤」开始使用。"
+            "（会议里记得把麦克风设为 CABLE Output）"
+        )
+        # Make sure the start button is enabled and visually draw the eye
+        # to it as the next action. setFocus also lets the user press Enter.
+        self.btn_start.setEnabled(True)
+        self.btn_start.setFocus()
+        self._append_log("✅ 声纹注册成功。下一步：点击「启动过滤」。")
 
     def _on_error(self, msg: str) -> None:
         self._append_log(f"ERROR: {msg}")
